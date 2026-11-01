@@ -14,9 +14,11 @@ use syntect::{
 use crate::{followup_text, App, Look, Reasoning};
 
 pub const HEADER_Y: u16 = 1;
-pub const REASONING_X: u16 = 11;
+pub const MASCOT_X: u16 = 3;
+pub const MASCOT_WIDTH: u16 = 8;
+pub const REASONING_X: u16 = 12;
 pub const REASONING_WIDTH: u16 = 5;
-pub const LOOK_X: u16 = 17;
+pub const LOOK_X: u16 = 18;
 
 pub fn look_width(look: Look) -> u16 {
     match look {
@@ -29,10 +31,13 @@ const INK: Color = Color::Rgb(226, 233, 243);
 const QUESTION: Color = Color::Rgb(180, 190, 205);
 const QUESTION_BG: Color = Color::Rgb(47, 52, 61);
 const MUTED: Color = Color::Rgb(122, 138, 158);
+const SHORTCUT_TEXT: Color = Color::Rgb(108, 122, 142);
+const SHORTCUT_BG: Color = Color::Rgb(40, 44, 52);
 const LOADING_TEXT: Color = Color::Rgb(166, 177, 191);
 const BLUE: Color = Color::Rgb(110, 180, 255);
 const CYAN: Color = Color::Rgb(91, 224, 219);
 const GREEN: Color = Color::Rgb(112, 211, 154);
+const EYE_WHITE: Color = Color::Rgb(255, 255, 255);
 const PURPLE: Color = Color::Rgb(187, 149, 255);
 const PINK: Color = Color::Rgb(255, 139, 180);
 const GOLD: Color = Color::Rgb(255, 203, 123);
@@ -122,7 +127,10 @@ fn answer_lines(
     let mut lines = vec![Line::from(vec![
         Span::styled(
             "Q: ",
-            Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(BLUE)
+                .bg(QUESTION_BG)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             question.to_owned(),
@@ -204,16 +212,33 @@ fn push_answer_line(
 }
 
 fn status_color(app: &App) -> Color {
-    let colors = if app.working {
-        [GOLD, ORANGE]
+    if app.working {
+        [GOLD, ORANGE][(app.tick / 3) % 2]
     } else if app.failed {
-        [PINK, Color::Rgb(235, 105, 128)]
+        [PINK, Color::Rgb(235, 105, 128)][(app.tick / 3) % 2]
     } else if !app.answer.is_empty() {
-        [CYAN, Color::Rgb(112, 211, 154)]
+        GREEN
     } else {
-        [MUTED, Color::Rgb(160, 178, 198)]
-    };
-    colors[(app.tick / 3) % 2]
+        MUTED
+    }
+}
+
+fn mascot_line(app: &App) -> Line<'static> {
+    let body_color = status_color(app);
+    Line::from(
+        app.mascot
+            .frame()
+            .chars()
+            .map(|character| {
+                let color = if matches!(character, 'O' | 'o' | '-') {
+                    EYE_WHITE
+                } else {
+                    body_color
+                };
+                Span::styled(character.to_string(), Style::default().fg(color))
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn toggle(label: &str, color: Color) -> Paragraph<'_> {
@@ -225,21 +250,15 @@ pub fn draw(frame: &mut Frame, app: &App, highlighter: &Highlighter) {
     let area = frame.area();
     if area.width < 49 || area.height < 12 {
         frame.render_widget(
-            Paragraph::new("kroak needs a little more room").style(Style::default().fg(MUTED)),
+            Paragraph::new("Terminal needs a little more room").style(Style::default().fg(MUTED)),
             area,
         );
         return;
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "kroak ",
-                Style::default().fg(INK).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("█", Style::default().fg(status_color(app))),
-        ])),
-        Rect::new(3, HEADER_Y, 9, 1),
+        Paragraph::new(mascot_line(app)),
+        Rect::new(MASCOT_X, HEADER_Y, MASCOT_WIDTH, 1),
     );
     let (reasoning_label, reasoning_color) = match app.reasoning {
         Reasoning::Duh => ("duh", CYAN),
@@ -261,7 +280,7 @@ pub fn draw(frame: &mut Frame, app: &App, highlighter: &Highlighter) {
     let input_width = area.width.saturating_sub(6) as usize;
     let input = if app.input.is_empty() {
         Line::from(Span::styled(
-            "Type for your toad...",
+            "Type your next kroak",
             Style::default().fg(MUTED),
         ))
     } else {
@@ -325,18 +344,39 @@ pub fn draw(frame: &mut Frame, app: &App, highlighter: &Highlighter) {
             .map(|line| line.width().max(1).div_ceil(line_width))
             .sum();
         let max_scroll = line_count.saturating_sub(content_height as usize) as u16;
+        let response_area = Rect::new(3, 5, area.width - 6, content_height);
         frame.render_widget(
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
                 .scroll((app.scroll.min(max_scroll), 0)),
-            Rect::new(3, 5, area.width - 6, content_height),
+            response_area,
         );
+        let buffer = frame.buffer_mut();
+        for y in response_area.top()..response_area.bottom() {
+            let question_row = (response_area.left()..response_area.right())
+                .any(|x| buffer[(x, y)].bg == QUESTION_BG);
+            if question_row {
+                buffer.set_style(
+                    Rect::new(response_area.x, y, response_area.width, 1),
+                    Style::default().bg(QUESTION_BG),
+                );
+            }
+        }
     }
 
+    let shortcuts = if app.selection_mode {
+        "F3 back to clicks · drag to select text · Esc quit"
+    } else {
+        "F1 reasoning · F2 file access · F3 select · Enter ask · Esc quit"
+    };
     frame.render_widget(
-        Paragraph::new("F1 reasoning · F2 file access · Enter ask · Esc quit")
+        Paragraph::new(app.launch_dir.to_string_lossy().into_owned())
             .style(Style::default().fg(MUTED)),
         Rect::new(3, area.height - 2, area.width - 6, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(shortcuts).style(Style::default().fg(SHORTCUT_TEXT).bg(SHORTCUT_BG)),
+        Rect::new(3, area.height - 1, area.width - 6, 1),
     );
 }
 
@@ -349,21 +389,110 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_block_pulses_slowly_with_colors_for_each_state() {
+    fn footer_shows_launch_folder_and_selection_shortcut() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/my-project"), sender);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let highlighter = Highlighter::new();
+        terminal
+            .draw(|frame| draw(frame, &app, &highlighter))
+            .unwrap();
+        let row = |terminal: &Terminal<TestBackend>, y| -> String {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect()
+        };
+        assert!(row(&terminal, 22).contains("/tmp/my-project"));
+        assert!(row(&terminal, 23).contains("F3 select"));
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(3, 22)].bg, Color::Reset);
+        assert_eq!(buffer[(3, 23)].fg, SHORTCUT_TEXT);
+        assert_eq!(buffer[(3, 23)].bg, SHORTCUT_BG);
+        assert_eq!(buffer[(76, 23)].bg, SHORTCUT_BG);
+
+        app.selection_mode = true;
+        terminal
+            .draw(|frame| draw(frame, &app, &highlighter))
+            .unwrap();
+        assert!(row(&terminal, 23).contains("drag to select text"));
+    }
+
+    #[test]
+    fn mascot_body_stays_gray_or_green_except_while_working() {
         let (sender, _) = mpsc::channel();
         let mut app = App::new(PathBuf::from("/tmp/project"), sender);
         let idle = status_color(&app);
+        assert_eq!(idle, MUTED);
         app.tick = 2;
         assert_eq!(idle, status_color(&app));
         app.tick = 3;
-        assert_ne!(idle, status_color(&app));
+        assert_eq!(idle, status_color(&app));
         app.working = true;
         let working = status_color(&app);
         assert_ne!(working, idle);
+        app.tick = 6;
+        assert_ne!(working, status_color(&app));
         app.working = false;
         app.answer = "Seven.".into();
         let done = status_color(&app);
-        assert_ne!(done, working);
+        assert_eq!(done, GREEN);
+        app.tick = 9;
+        assert_eq!(done, status_color(&app));
+    }
+
+    #[test]
+    fn mascot_eyes_remain_white_during_blinks_and_movement() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/project"), sender);
+        let mut saw_closed_eyes = false;
+        for _ in 0..40 {
+            let line = mascot_line(&app);
+            assert_eq!(line.spans.len(), 7);
+            for span in &line.spans {
+                let character = span.content.chars().next().unwrap();
+                if matches!(character, 'O' | 'o' | '-') {
+                    assert_eq!(span.style.fg, Some(EYE_WHITE));
+                    saw_closed_eyes |= character == '-';
+                } else {
+                    assert_eq!(span.style.fg, Some(status_color(&app)));
+                }
+            }
+            app.mascot.tick();
+        }
+        assert!(saw_closed_eyes);
+
+        app.working = true;
+        app.mascot.start_work();
+        for _ in 0..6 {
+            let line = mascot_line(&app);
+            assert!(line
+                .spans
+                .iter()
+                .filter(|span| span.content == "O")
+                .all(|span| span.style.fg == Some(EYE_WHITE)));
+            app.mascot.tick();
+        }
+    }
+
+    #[test]
+    fn clicked_mascot_fits_beside_the_mode_buttons() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/project"), sender);
+        app.mascot.play_click();
+        app.mascot.tick();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let highlighter = Highlighter::new();
+        terminal
+            .draw(|frame| draw(frame, &app, &highlighter))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let header: String = (3..30).map(|x| buffer[(x, HEADER_Y)].symbol()).collect();
+        assert!(header.starts_with("▆▆O▆O▆▂▂ [duh]"));
+        assert_eq!(
+            buffer[(MASCOT_X + MASCOT_WIDTH - 1, HEADER_Y)].symbol(),
+            "▂"
+        );
+        assert_eq!(buffer[(MASCOT_X + 2, HEADER_Y)].fg, EYE_WHITE);
     }
 
     #[test]
@@ -371,7 +500,7 @@ mod tests {
         let lines = answer_lines("Question", "Answer", false, &Highlighter::new());
         assert_eq!(lines[0].spans[0].content, "Q: ");
         assert_eq!(lines[0].spans[0].style.fg, Some(BLUE));
-        assert_eq!(lines[0].spans[0].style.bg, None);
+        assert_eq!(lines[0].spans[0].style.bg, Some(QUESTION_BG));
         assert_eq!(lines[1].spans[0].content, "A: ");
         assert_eq!(lines[1].spans[0].style.fg, Some(GREEN));
         assert_eq!(lines[1].spans[0].style.bg, None);
@@ -379,6 +508,28 @@ mod tests {
         assert_eq!(lines[0].spans[1].style.bg, Some(QUESTION_BG));
         assert_eq!(lines[1].spans[1].style.fg, Some(INK));
         assert_eq!(lines[1].spans[1].style.bg, None);
+    }
+
+    #[test]
+    fn question_background_fills_entire_row_including_wrapped_rows() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/project"), sender);
+        app.question = "frog ".repeat(30);
+        app.answer = "Yes.".into();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let highlighter = Highlighter::new();
+        terminal
+            .draw(|frame| draw(frame, &app, &highlighter))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let answer_y = (6..20).find(|&y| buffer[(3, y)].symbol() == "A").unwrap();
+        assert!(answer_y > 6);
+        for y in 5..answer_y {
+            assert_eq!(buffer[(3, y)].bg, QUESTION_BG);
+            assert_eq!(buffer[(76, y)].bg, QUESTION_BG);
+        }
+        assert_eq!(buffer[(3, answer_y)].bg, Color::Reset);
+        assert_eq!(buffer[(76, answer_y)].bg, Color::Reset);
     }
 
     #[test]
@@ -400,12 +551,7 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.backend().buffer()[(3, 3)].fg, LOADING_TEXT);
         assert_eq!(terminal.backend().buffer()[(4, 3)].fg, ORANGE);
-        assert!(terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .all(|cell| cell.bg == Color::Reset));
+        assert!((3..77).all(|x| terminal.backend().buffer()[(x, 3)].bg == Color::Reset));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# kroak
+# kroak ▆▆O▆O▆▂
 
 A co-toad that will not take away your learning opportunity.
 

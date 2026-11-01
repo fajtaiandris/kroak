@@ -1,4 +1,5 @@
 mod codex;
+mod mascot;
 mod ui;
 
 use std::{
@@ -50,9 +51,11 @@ struct App {
     failed: bool,
     reasoning: Reasoning,
     look: Look,
+    selection_mode: bool,
     working: bool,
     scroll: u16,
     tick: usize,
+    mascot: mascot::Mascot,
     launch_dir: PathBuf,
     sender: mpsc::Sender<Result<String>>,
 }
@@ -85,9 +88,11 @@ impl App {
             failed: false,
             reasoning: Reasoning::Duh,
             look: Look::Dont,
+            selection_mode: false,
             working: false,
             scroll: 0,
             tick: 0,
+            mascot: mascot::Mascot::new(),
             launch_dir,
             sender,
         }
@@ -148,11 +153,13 @@ impl App {
         self.scroll = 0;
         self.working = true;
         self.tick = 0;
+        self.mascot.start_work();
         Some(AskRequest { question, previous })
     }
 
     fn receive(&mut self, result: Result<String>) {
         self.working = false;
+        self.mascot.finish_work();
         self.input.clear();
         match result {
             Ok(answer) => {
@@ -186,6 +193,10 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return true;
         }
+        if key.code == KeyCode::F(3) {
+            self.selection_mode = !self.selection_mode;
+            return true;
+        }
         if key.code == KeyCode::Esc
             || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
         {
@@ -194,6 +205,9 @@ impl App {
                 return true;
             }
             return false;
+        }
+        if self.selection_mode {
+            return true;
         }
         if self.working {
             return true;
@@ -223,6 +237,9 @@ impl App {
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
+        if self.selection_mode {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_add(3),
             MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_sub(3),
@@ -230,7 +247,11 @@ impl App {
                 let x = mouse.column;
                 let y = mouse.row;
                 if y == ui::HEADER_Y {
-                    if (ui::REASONING_X..ui::REASONING_X + ui::REASONING_WIDTH).contains(&x) {
+                    let mascot_width = self.mascot.frame().chars().count() as u16;
+                    if (ui::MASCOT_X..ui::MASCOT_X + mascot_width).contains(&x) {
+                        self.mascot.play_click();
+                    } else if (ui::REASONING_X..ui::REASONING_X + ui::REASONING_WIDTH).contains(&x)
+                    {
                         self.toggle_reasoning();
                     } else if (ui::LOOK_X..ui::LOOK_X + ui::look_width(self.look)).contains(&x) {
                         self.toggle_look();
@@ -278,13 +299,26 @@ fn run() -> Result<()> {
         terminal.draw(|frame| ui::draw(frame, &app, &highlighter))?;
         if event::poll(Duration::from_millis(80))? {
             match event::read()? {
-                Event::Key(key) if !app.key(key) => break,
+                Event::Key(key) => {
+                    let selecting = app.selection_mode;
+                    if !app.key(key) {
+                        break;
+                    }
+                    if app.selection_mode != selecting {
+                        if app.selection_mode {
+                            execute!(io::stdout(), DisableMouseCapture)?;
+                        } else {
+                            execute!(io::stdout(), EnableMouseCapture)?;
+                        }
+                    }
+                }
                 Event::Mouse(mouse) => app.mouse(mouse),
                 _ => {}
             }
         }
         if last_tick.elapsed() >= Duration::from_millis(240) {
             app.tick = app.tick.wrapping_add(1);
+            app.mascot.tick();
             last_tick = Instant::now();
         }
     }
@@ -294,7 +328,7 @@ fn run() -> Result<()> {
 fn main() -> Result<()> {
     match env::args().nth(1).as_deref() {
         Some("--help" | "-h") => {
-            println!("kroak — a tiny Codex question helper\n\nRun kroak in a terminal. Codex CLI must be installed and signed in.\nPrefix a question with /but to follow up on the previous answer.\nF1: duh/ooh  F2: don't look/look  Enter: ask  Esc: quit");
+            println!("kroak — a tiny Codex question helper\n\nRun kroak in a terminal. Codex CLI must be installed and signed in.\nPrefix a question with /but to follow up on the previous answer.\nF1: duh/ooh  F2: don't look/look  F3: select text with the mouse  Enter: ask  Esc: quit");
             Ok(())
         }
         Some("--version" | "-V") => {
@@ -345,8 +379,8 @@ mod tests {
         let line: String = (0..80)
             .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
             .collect();
-        assert!(line.contains("kroak"));
-        assert!(line.contains("█ [duh] [don't look]"));
+        assert!(line.contains("▆▆O▆O▆▂  [duh] [don't look]"));
+        assert!(!line.contains("kroak"));
         assert!(line.contains("duh"));
         assert!(!line.contains("ooh"));
         assert!(line.contains("don't look"));
@@ -355,7 +389,7 @@ mod tests {
             .flat_map(|y| (0..80).map(move |x| (x, y)))
             .map(|(x, y)| terminal.backend().buffer()[(x, y)].symbol().to_owned())
             .collect();
-        assert!(screen.contains("Type for your toad..."));
+        assert!(screen.contains("Type your next kroak"));
         assert!(!screen.contains("YOUR QUESTION"));
         assert!(!screen.contains("ANSWER"));
         assert!(!screen.contains("clear"));
@@ -363,6 +397,55 @@ mod tests {
             terminal.backend().buffer()[(ui::REASONING_X, 1)].bg,
             ratatui::style::Color::Reset
         );
+    }
+
+    #[test]
+    fn clicking_idle_mascot_starts_its_animation() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/project"), sender);
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: ui::MASCOT_X + 2,
+            row: ui::HEADER_Y,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.mascot.tick();
+        assert_eq!(app.mascot.frame(), "▆▆O▆O▆▂▂");
+        assert_eq!(app.reasoning, Reasoning::Duh);
+        assert_eq!(app.look, Look::Dont);
+
+        app.working = true;
+        app.mascot.start_work();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: ui::MASCOT_X + 2,
+            row: ui::HEADER_Y,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.mascot.tick();
+        assert_eq!(app.mascot.frame(), "▆▆▆O▆O▂");
+    }
+
+    #[test]
+    fn selection_mode_releases_clicks_and_pauses_typing() {
+        let (sender, _) = mpsc::channel();
+        let mut app = App::new(PathBuf::from("/tmp/project"), sender);
+        app.key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+        assert!(app.selection_mode);
+        app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.input.is_empty());
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: ui::REASONING_X + 2,
+            row: ui::HEADER_Y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.reasoning, Reasoning::Duh);
+
+        app.key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+        assert!(!app.selection_mode);
+        app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.input, "x");
     }
 
     #[test]

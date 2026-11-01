@@ -253,7 +253,7 @@ mod tests {
         let path = Path::new("/private/example-project");
         assert!(!prompt("hi", None, Look::Dont, path).contains("example-project"));
         assert!(prompt("hi", None, Look::Look, path).contains("example-project"));
-        assert!(prompt("What changed?", None, Look::Look, path).contains("inspect Git status"));
+        assert!(prompt("What changed?", None, Look::Look, path).contains("read-only Git commands"));
     }
 
     #[test]
