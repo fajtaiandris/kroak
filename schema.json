@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "short_answer": { "type": "string" }
+  },
+  "required": ["short_answer"],
+  "additionalProperties": false
+}
