@@ -2,7 +2,7 @@
 
 A co-toad that will not take away your learning opportunity.
 
-<img width="1012" height="666" alt="kroak" src="https://github.com/user-attachments/assets/0260d080-9d3f-479f-86b9-71b42a726143" />
+<img width="506" height="333" alt="kroak" src="https://github.com/user-attachments/assets/0260d080-9d3f-479f-86b9-71b42a726143" />
 
 
 *Works on top of codex cli with hardcoded models - which is terrible design, but does it for me, personally.*
